@@ -81,7 +81,7 @@ class OUNoise:
         self.state += dx
         return self.state
 
-class DDPGAgent:
+class TD3Agent:
     def __init__(
         self,
         obs_dim: int,
@@ -90,23 +90,30 @@ class DDPGAgent:
         actor_lr=1e-3,
         critic_lr=1e-3,
         gamma=0.99,
-        tau=0.005, #target network가 얼마나 따라갈지 정해주는 비율
+        tau=0.005,
         device: torch.device = DEVICE,
     ):
         self.device = device
         self.gamma = gamma
         self.tau = tau
 
-        self.actor = Actor(obs_dim, actor_hidden).to(device) # actor
-        self.actor_target = Actor(obs_dim, actor_hidden).to(device) # actor의 느린 복사복
-        self.critic = Critic(obs_dim, critic_hidden).to(device) # critic
-        self.critic_target = Critic(obs_dim, critic_hidden).to(device) # critic_target의 복사본
+        self.actor = Actor(obs_dim, actor_hidden).to(device)
+        self.actor_target = Actor(obs_dim, actor_hidden).to(device)
+        self.critic1 = Critic(obs_dim, critic_hidden).to(device)
+        self.critic2 = Critic(obs_dim, critic_hidden).to(device)
+        self.critic1_target = Critic(obs_dim, critic_hidden).to(device)
+        self.critic2_target = Critic(obs_dim, critic_hidden).to(device)
 
-        self.actor_target.load_state_dict(self.actor.state_dict()) #가중치를 똑같이 해줍니다
-        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.critic1_target.load_state_dict(self.critic1.state_dict())
+        self.critic2_target.load_state_dict(self.critic2.state_dict())
 
         self.actor_opt = optim.Adam(self.actor.parameters(), lr=actor_lr)
-        self.critic_opt = optim.Adam(self.critic.parameters(), lr=critic_lr)
+        self.critic1_opt = optim.Adam(self.critic1.parameters(), lr=critic_lr)
+        self.critic2_opt = optim.Adam(self.critic2.parameters(), lr=critic_lr)
+
+        self.policy_delay = 2
+        self.total_it = 0
 
     @torch.no_grad()
     def act(self, obs: np.ndarray, noise: np.ndarray | None = None): #행동을 뽑는 단계
@@ -119,41 +126,57 @@ class DDPGAgent:
         return a_np.astype(np.float32)               # (dx,)
 
     def update(self, replay: ReplayBuffer, batch_size=128):
+        self.total_it += 1
         obs, action, rew, next_obs, done = replay.sample(batch_size)
 
         # --- Critic update ---
         with torch.no_grad():
+            # Target policy smoothing
             next_action = self.actor_target(next_obs)
-            target_q = self.critic_target(next_obs, next_action)
+            noise = (0.2 * torch.randn_like(next_action)).clamp(-0.5, 0.5)
+            next_action = (self.actor_target(next_obs) + noise).clamp(-1.0, 1.0)
+            # Clipped Double Q
+            target_q1 = self.critic1_target(next_obs, next_action)
+            target_q2 = self.critic2_target(next_obs, next_action)
+            target_q = torch.min(target_q1, target_q2)
             y = rew + (1.0 - done) * self.gamma * target_q
 
-        q = self.critic(obs, action)
-        critic_loss = nn.functional.mse_loss(q, y)
+        q1 = self.critic1(obs, action)
+        q2 = self.critic2(obs, action)
+        critic1_loss = nn.functional.mse_loss(q1, y)
+        critic2_loss = nn.functional.mse_loss(q2, y)
 
-        self.critic_opt.zero_grad()
-        critic_loss.backward()
-        self.critic_opt.step()
+        self.critic1_opt.zero_grad()
+        critic1_loss.backward()
+        self.critic1_opt.step()
+        self.critic2_opt.zero_grad()
+        critic2_loss.backward()
+        self.critic2_opt.step()
 
-        # --- Actor update (maximize Q) ---
-        actor_loss = -self.critic(obs, self.actor(obs)).mean()
+        actor_loss = None
+        # --- Policy delay ---
+        if self.total_it % self.policy_delay == 0:
+            actor_loss = -self.critic1(obs, self.actor(obs)).mean()
+            self.actor_opt.zero_grad()
+            actor_loss.backward()
+            self.actor_opt.step()
 
-        self.actor_opt.zero_grad()
-        actor_loss.backward()
-        self.actor_opt.step()
-
-        # --- Soft target updates ---
-        with torch.no_grad():
-            for p, p_t in zip(self.actor.parameters(), self.actor_target.parameters()):
-                p_t.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
-            for p, p_t in zip(self.critic.parameters(), self.critic_target.parameters()):
-                p_t.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
+            # --- Soft target updates for all targets ---
+            with torch.no_grad():
+                for p, p_t in zip(self.actor.parameters(), self.actor_target.parameters()):
+                    p_t.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
+                for p, p_t in zip(self.critic1.parameters(), self.critic1_target.parameters()):
+                    p_t.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
+                for p, p_t in zip(self.critic2.parameters(), self.critic2_target.parameters()):
+                    p_t.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
 
         return {
-            "critic_loss": float(critic_loss.detach().cpu().item()),
-            "actor_loss": float(actor_loss.detach().cpu().item()),
+            "critic1_loss": float(critic1_loss.detach().cpu().item()),
+            "critic2_loss": float(critic2_loss.detach().cpu().item()),
+            "actor_loss": float(actor_loss.detach().cpu().item()) if actor_loss is not None else None,
         }
 
-def train_ddpg(env, agent, replay, episodes=300, start_steps=10000, batch_size=128, noise_scale=0.3, render=False):
+def train_td3(env, agent, replay, episodes=300, start_steps=10000, batch_size=128, noise_scale=0.3, render=False):
     returns = []
     ou_noise = OUNoise(size=1)
     # total_Step = 0
@@ -185,20 +208,21 @@ def train_ddpg(env, agent, replay, episodes=300, start_steps=10000, batch_size=1
         # Save episode returns progressively
         import pandas as pd
         df = pd.DataFrame({"episode": list(range(1, len(returns)+1)), "reward": returns})
-        df.to_excel("episode_rewards.xlsx", index=False)
+        df.to_excel("./mountain_car_continuous/TD3/episode_rewards.xlsx", index=False)
     return returns
 
 if __name__ == "__main__":
     env = gym.make("MountainCarContinuous-v0", render_mode=None)
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
-    agent = DDPGAgent(obs_dim=obs_dim)
+    agent = TD3Agent(obs_dim=obs_dim)
     replay = ReplayBuffer(obs_dim, act_dim, size=200000)
-    train_ddpg(env, agent, replay, episodes=200, start_steps=10000, batch_size=128, noise_scale=1.0, render=False)
+    train_td3(env, agent, replay, episodes=200, start_steps=10000, batch_size=128, noise_scale=1.0, render=False)
 
     # --- Save trained parameters ---
-    torch.save(agent.actor.state_dict(), "actor.pth")
-    torch.save(agent.critic.state_dict(), "critic.pth")
+    torch.save(agent.actor.state_dict(), "./mountain_car_continuous/TC3/actor.pth")
+    # Save critic1 only for compatibility (or save both if needed)
+    torch.save(agent.critic1.state_dfict(), "./mountain_car_continuous/TC3/critic.pth")
     print("모델 저장 완료: actor.pth , critic.pth")
 
     import pandas as pd
@@ -208,6 +232,6 @@ if __name__ == "__main__":
     plt.plot(df["episode"], df["reward"])
     plt.xlabel("Episode")
     plt.ylabel("Average Reward")
-    plt.title("DDPG Training – Episode Rewards")
+    plt.title("TD3 Training – Episode Rewards")
     plt.grid(True)
     plt.show()

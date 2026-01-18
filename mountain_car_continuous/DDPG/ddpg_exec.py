@@ -185,7 +185,7 @@ def train_ddpg(env, agent, replay, episodes=300, start_steps=10000, batch_size=1
         # Save episode returns progressively
         import pandas as pd
         df = pd.DataFrame({"episode": list(range(1, len(returns)+1)), "reward": returns})
-        df.to_excel("episode_rewards.xlsx", index=False)
+        df.to_excel("./mountain_car_continuous/DDPG/episode_rewards.xlsx", index=False)
     return returns
 
 if __name__ == "__main__":
@@ -197,8 +197,8 @@ if __name__ == "__main__":
     train_ddpg(env, agent, replay, episodes=200, start_steps=10000, batch_size=128, noise_scale=1.0, render=False)
 
     # --- Save trained parameters ---
-    torch.save(agent.actor.state_dict(), "actor.pth")
-    torch.save(agent.critic.state_dict(), "critic.pth")
+    torch.save(agent.actor.state_dict(), "./mountain_car_continuous/DDPG/actor.pth")
+    torch.save(agent.critic.state_dict(), "./mountain_car_continuous/DDPG/critic.pth")
     print("모델 저장 완료: actor.pth , critic.pth")
 
     import pandas as pd
