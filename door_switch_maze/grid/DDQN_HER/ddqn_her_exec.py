@@ -48,7 +48,7 @@ class HERReplayBuffer:
         done = torch.as_tensor(self.done_buf[idxs], dtype=torch.float32, device=self.device).unsqueeze(-1)
         return obs, acts, rews, next_obs, done
 
-class DQNAgent:
+class DDQNAgent:
     def __init__(self, state_size, action_size, lr=1e-4, gamma=0.99, tau=1e-3, device=DEVICE):
         self.q_local = QNetwork(state_size, action_size).to(device)
         self.q_target = QNetwork(state_size, action_size).to(device)
@@ -73,13 +73,24 @@ class DQNAgent:
 
     def update(self, replay, batch_size=128):
         states, actions, rewards, next_states, dones = replay.sample(batch_size)
-        Q_targets_next = self.q_target(next_states).detach().max(1)[0].unsqueeze(1)
+        
+        # Double DQN: Local Network에서 액션 선택
+        self.q_local.eval()
+        with torch.no_grad():
+            next_actions = self.q_local(next_states).max(1)[1].unsqueeze(1)
+        self.q_local.train()
+        
+        # Target Network에서 해당 액션 가치 평가
+        Q_targets_next = self.q_target(next_states).gather(1, next_actions).detach()
         Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
         Q_expected = self.q_local(states).gather(1, actions)
+        
         loss = nn.functional.mse_loss(Q_expected, Q_targets)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        
+        # Soft update
         for target_param, local_param in zip(self.q_target.parameters(), self.q_local.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
         return loss.item()
@@ -87,14 +98,12 @@ class DQNAgent:
 def get_agent_pos(env):
     return np.array(env.unwrapped.agent_pos, dtype=np.float32)
 
-def train_dqn_her_future(env, agent, replay, episodes=500, k_future=4, batch_size=128):
+def train_ddqn_her(env, agent, replay, episodes=500, k_future=4, batch_size=128):
     scores = []
     eps = 1.0
     eps_decay = 0.995
     eps_min = 0.01
     actual_goal = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
-    
-    # 저장 경로 설정을 위해 현재 스크립트 경로 획득
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     for ep in range(episodes):
@@ -115,8 +124,11 @@ def train_dqn_her_future(env, agent, replay, episodes=500, k_future=4, batch_siz
                 agent.update(replay, batch_size)
             if done: break
 
+        # 실제 경험 저장
         for exp in episode_experience:
             replay.store(exp['s'], actual_goal, exp['a'], exp['r'], exp['s_next'], actual_goal, exp['d'])
+        
+        # HER (Future)
         for t in range(len(episode_experience)):
             if t < len(episode_experience) - 1:
                 future_indices = random.sample(range(t, len(episode_experience)), min(k_future, len(episode_experience) - t))
@@ -132,20 +144,15 @@ def train_dqn_her_future(env, agent, replay, episodes=500, k_future=4, batch_siz
         print(f"Episode {ep+1}/{episodes}, Score: {score:.4f}, Epsilon: {eps:.4f}")
         
         if (ep + 1) % 10 == 0:
-            excel_path = os.path.join(current_dir, "episode_rewards_her.xlsx")
-            image_path = os.path.join(current_dir, "scores_her.png")
-            pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(excel_path, index=False)
-            plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(image_path); plt.close()
+            pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(os.path.join(current_dir, "episode_rewards_ddqn_her.xlsx"), index=False)
+            plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(os.path.join(current_dir, "scores_ddqn_her.png")); plt.close()
     return scores
 
 if __name__ == "__main__":
     env = gym.make("MiniGrid-DoorKey-8x8-v0"); env = FlatObsWrapper(env)
-    agent = DQNAgent(state_size=env.observation_space.shape[0] + 2, action_size=env.action_space.n)
+    agent = DDQNAgent(state_size=env.observation_space.shape[0] + 2, action_size=env.action_space.n)
     replay = HERReplayBuffer(env.observation_space.shape[0], 2)
-    train_dqn_her_future(env, agent, replay, episodes=500)
+    train_ddqn_her(env, agent, replay)
     
-    # 모델 저장 경로 설정
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_dir, "dqn_her_model.pth")
-    torch.save(agent.q_local.state_dict(), model_path)
-    print(f"Final model saved to: {model_path}")
+    torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "ddqn_her_model.pth"))
