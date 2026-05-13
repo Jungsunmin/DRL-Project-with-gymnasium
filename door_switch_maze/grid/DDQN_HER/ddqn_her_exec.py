@@ -98,15 +98,16 @@ class DDQNAgent:
 def get_agent_pos(env):
     return np.array(env.unwrapped.agent_pos, dtype=np.float32)
 
-def train_ddqn_her(env, agent, replay, episodes=500, k_future=4, batch_size=128):
-    scores = []
-    eps = 1.0
-    eps_decay = 0.995
-    eps_min = 0.01
+def train_ddqn_her(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, k_future=4, batch_size=128, start_scores=None):
+    scores = start_scores if start_scores is not None else []
+    eps = eps_start
+    
+    start_ep = len(scores)
+    total_episodes = start_ep + episodes
     actual_goal = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
-    for ep in range(episodes):
+    for ep in range(start_ep, total_episodes):
         state, _ = env.reset()
         episode_experience = []
         score = 0
@@ -140,19 +141,40 @@ def train_ddqn_her(env, agent, replay, episodes=500, k_future=4, batch_size=128)
                     replay.store(episode_experience[t]['s'], future_goal, episode_experience[t]['a'], new_reward, episode_experience[t]['s_next'], future_goal, new_done)
 
         scores.append(score)
-        eps = max(eps_min, eps * eps_decay)
-        print(f"Episode {ep+1}/{episodes}, Score: {score:.4f}, Epsilon: {eps:.4f}")
+        eps = max(eps_end, eps * eps_decay)
         
         if (ep + 1) % 10 == 0:
+            print(f"Episode {ep+1}/{total_episodes}, Score: {score:.4f}, Epsilon: {eps:.4f}")
             pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(os.path.join(current_dir, "episode_rewards_ddqn_her.xlsx"), index=False)
             plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(os.path.join(current_dir, "scores_ddqn_her.png")); plt.close()
+            
+            model_path = os.path.join(current_dir, "ddqn_her_model.pth")
+            torch.save(agent.q_local.state_dict(), model_path)
+            
     return scores
 
 if __name__ == "__main__":
     env = gym.make("MiniGrid-DoorKey-8x8-v0"); env = FlatObsWrapper(env)
     agent = DDQNAgent(state_size=env.observation_space.shape[0] + 2, action_size=env.action_space.n)
     replay = HERReplayBuffer(env.observation_space.shape[0], 2)
-    train_ddqn_her(env, agent, replay)
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "ddqn_her_model.pth"))
+    model_path = os.path.join(current_dir, "ddqn_her_model.pth")
+    excel_path = os.path.join(current_dir, "episode_rewards_ddqn_her.xlsx")
+
+    if os.path.exists(model_path):
+        agent.q_local.load_state_dict(torch.load(model_path, map_location=DEVICE))
+        agent.q_target.load_state_dict(agent.q_local.state_dict())
+        print(f"Loaded existing model from {model_path}")
+
+    start_scores = []
+    if os.path.exists(excel_path):
+        df = pd.read_excel(excel_path)
+        start_scores = df['score'].tolist()
+        print(f"Loaded {len(start_scores)} previous scores from {excel_path}")
+
+    print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
+    train_ddqn_her(env, agent, replay, episodes=500, eps_start=0.4, start_scores=start_scores)
+    
+    torch.save(agent.q_local.state_dict(), model_path)
+    print(f"Final model saved to: {model_path}")

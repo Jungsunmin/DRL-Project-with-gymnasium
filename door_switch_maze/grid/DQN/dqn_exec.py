@@ -105,11 +105,16 @@ class DQNAgent:
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
-def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.995, batch_size=128):
-    scores = []
+def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, batch_size=128, start_scores=None):
+    scores = start_scores if start_scores is not None else []
     eps = eps_start
     
-    for ep in range(episodes):
+    start_ep = len(scores)
+    total_episodes = start_ep + episodes
+    
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    for ep in range(start_ep, total_episodes):
         state, _ = env.reset()
         score = 0
         for t in range(500): # max steps per episode
@@ -130,11 +135,22 @@ def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, ep
         eps = max(eps_end, eps_decay * eps)
         
         if (ep + 1) % 10 == 0:
-            print(f"Episode {ep+1}/{episodes}, Average Score: {np.mean(scores[-10:]):.4f}, Epsilon: {eps:.4f}")
+            print(f"Episode {ep+1}/{total_episodes}, Average Score: {np.mean(scores[-10:]):.4f}, Epsilon: {eps:.4f}")
             
             # Save results progressively
             df = pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores})
-            df.to_excel("episode_rewards.xlsx", index=False)
+            df.to_excel(os.path.join(current_dir, "episode_rewards.xlsx"), index=False)
+            
+            # Save model periodically
+            torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "dqn_model.pth"))
+            
+            # Plotting
+            plt.figure(figsize=(10,5))
+            plt.plot(scores)
+            plt.ylabel('Score')
+            plt.xlabel('Episode #')
+            plt.savefig(os.path.join(current_dir, 'scores.png'))
+            plt.close()
 
     return scores
 
@@ -148,15 +164,26 @@ if __name__ == "__main__":
     agent = DQNAgent(state_size=state_size, action_size=action_size)
     replay = ReplayBuffer(state_size, size=100000)
     
-    print(f"Starting training on {DEVICE}...")
-    scores = train_dqn(env, agent, replay, episodes=500)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, "dqn_model.pth")
+    excel_path = os.path.join(current_dir, "episode_rewards.xlsx")
+
+    # Load existing model if available
+    if os.path.exists(model_path):
+        agent.q_local.load_state_dict(torch.load(model_path, map_location=DEVICE))
+        agent.q_target.load_state_dict(agent.q_local.state_dict())
+        print(f"Loaded existing model from {model_path}")
+
+    # Load existing scores if available
+    start_scores = []
+    if os.path.exists(excel_path):
+        df = pd.read_excel(excel_path)
+        start_scores = df['score'].tolist()
+        print(f"Loaded {len(start_scores)} previous scores from {excel_path}")
+
+    print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
+    scores = train_dqn(env, agent, replay, episodes=500, eps_start=0.4, start_scores=start_scores)
     
-    # Save model
-    torch.save(agent.q_local.state_dict(), "dqn_model.pth")
+    # Final save
+    torch.save(agent.q_local.state_dict(), model_path)
     print("Training finished. Model saved.")
-    
-    # Plotting
-    plt.plot(np.arange(len(scores)), scores)
-    plt.ylabel('Score')
-    plt.xlabel('Episode #')
-    plt.savefig('scores.png')
