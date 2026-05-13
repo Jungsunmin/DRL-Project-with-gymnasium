@@ -91,7 +91,7 @@ class DQNAgent:
 def get_agent_pos(env):
     return np.array(env.unwrapped.agent_pos, dtype=np.float32)
 
-def train_dqn_her_future(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, k_future=4, batch_size=128, start_scores=None):
+def train_dqn_her_future(env, agent, replay, episodes=500, eps_start=0., eps_end=0.01, eps_decay=0.995, k_future=4, batch_size=128, start_scores=None):
     scores = start_scores if start_scores is not None else []
     eps = eps_start
     
@@ -175,7 +175,7 @@ if __name__ == "__main__":
             print(f"Loaded {len(start_scores)} previous scores.")
 
     print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
-    train_dqn_her_future(env, agent, replay, episodes=500, eps_start=0.4, start_scores=start_scores)
+    train_dqn_her_future(env, agent, replay, episodes=500, eps_start=1.0, start_scores=start_scores)
     
     torch.save(agent.q_local.state_dict(), model_path)
     print(f"Final model saved to: {model_path}")

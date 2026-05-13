@@ -193,7 +193,7 @@ if __name__ == "__main__":
             print(f"Loaded {len(start_scores)} previous scores.")
 
     print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
-    scores = train_dqn(env, agent, replay, episodes=500, eps_start=0.4, start_scores=start_scores)
+    scores = train_dqn(env, agent, replay, episodes=500, eps_start= 1.0, start_scores=start_scores)
     
     # Final save
     torch.save(agent.q_local.state_dict(), model_path)
