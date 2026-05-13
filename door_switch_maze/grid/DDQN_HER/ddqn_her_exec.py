@@ -187,7 +187,7 @@ if __name__ == "__main__":
             print(f"Loaded {len(start_scores)} previous scores.")
 
     print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
-    train_ddqn_her(env, agent, replay, episodes=500, eps_start= 1.0, start_scores=start_scores)
+    train_ddqn_her(env, agent, replay, episodes=500, eps_start= 0.5, start_scores=start_scores)
     
     torch.save(agent.q_local.state_dict(), model_path)
     print(f"Final model saved to: {model_path}")
