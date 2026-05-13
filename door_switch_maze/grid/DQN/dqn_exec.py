@@ -12,6 +12,9 @@ from model import QNetwork
 
 # GPU selection (supporting MPS for Mac, CUDA for Nvidia, or CPU)
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
+print(f"==========================================")
+print(f"📌 Using Device: {DEVICE}")
+print(f"==========================================")
 
 class ReplayBuffer:
     def __init__(self, obs_dim, size=100000, device=DEVICE):
@@ -134,9 +137,11 @@ def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps
         scores.append(score)
         eps = max(eps_end, eps_decay * eps)
         
+        progress = (ep + 1) / total_episodes * 100
+        remaining = 100 - progress
+        print(f"Episode {ep+1}/{total_episodes}, Average Score: {np.mean(scores[-10:]):.4f}, Epsilon: {eps:.4f}, Progress: {progress:.2f}%, Remaining: {remaining:.2f}%")
+        
         if (ep + 1) % 10 == 0:
-            print(f"Episode {ep+1}/{total_episodes}, Average Score: {np.mean(scores[-10:]):.4f}, Epsilon: {eps:.4f}")
-            
             # Save results progressively
             df = pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores})
             df.to_excel(os.path.join(current_dir, "episode_rewards.xlsx"), index=False)
@@ -179,7 +184,13 @@ if __name__ == "__main__":
     if os.path.exists(excel_path):
         df = pd.read_excel(excel_path)
         start_scores = df['score'].tolist()
-        print(f"Loaded {len(start_scores)} previous scores from {excel_path}")
+        # Truncate to the last completed 500-episode block
+        original_count = len(start_scores)
+        start_scores = start_scores[:(len(start_scores) // 500) * 500]
+        if len(start_scores) < original_count:
+            print(f"Loaded {original_count} previous scores, but truncated to {len(start_scores)} to restart from the beginning of the current block.")
+        else:
+            print(f"Loaded {len(start_scores)} previous scores.")
 
     print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
     scores = train_dqn(env, agent, replay, episodes=500, eps_start=0.4, start_scores=start_scores)
