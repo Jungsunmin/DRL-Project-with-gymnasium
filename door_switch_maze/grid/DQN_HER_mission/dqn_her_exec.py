@@ -88,6 +88,18 @@ class DQNAgent:
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
         return loss.item()
 
+def normalize_obs(obs):
+    obs = np.asarray(obs, dtype=np.float32)
+    max_val = np.max(obs)
+    if max_val > 1.0:
+        obs = obs / max_val
+    return obs
+
+def normalize_goal(goal, env):
+    goal = np.asarray(goal, dtype=np.float32)
+    scale = np.array([env.unwrapped.width - 1, env.unwrapped.height - 1], dtype=np.float32)
+    return goal / scale
+
 def get_agent_pos(env):
     return np.array(env.unwrapped.agent_pos, dtype=np.float32)
 
@@ -97,19 +109,22 @@ def train_dqn_her_future(env, agent, replay, episodes=500, eps_start=0., eps_end
     
     start_ep = len(scores)
     total_episodes = start_ep + episodes
-    actual_goal = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
+    actual_goal_raw = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
+    actual_goal = normalize_goal(actual_goal_raw, env)
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     for ep in range(start_ep, total_episodes):
         state, _ = env.reset()
+        state = normalize_obs(state)
         episode_experience = []
         score = 0
         for t in range(500):
             action = agent.act(state, actual_goal, eps)
             next_state, reward, terminated, truncated, _ = env.step(action)
+            next_state = normalize_obs(next_state)
             done = terminated or truncated
             episode_experience.append({
-                's': state, 'a': action, 'r': reward, 's_next': next_state, 
+                's': state, 'a': action, 'r': reward, 's_next': next_state,
                 'd': done, 'pos': get_agent_pos(env)
             })
             state = next_state
@@ -124,10 +139,11 @@ def train_dqn_her_future(env, agent, replay, episodes=500, eps_start=0., eps_end
             if t < len(episode_experience) - 1:
                 future_indices = random.sample(range(t, len(episode_experience)), min(k_future, len(episode_experience) - t))
                 for f_idx in future_indices:
-                    future_goal = episode_experience[f_idx]['pos']
-                    dist = np.linalg.norm(episode_experience[t]['pos'] - future_goal)
+                    future_goal_raw = episode_experience[f_idx]['pos']
+                    dist = np.linalg.norm(episode_experience[t]['pos'] - future_goal_raw)
                     new_reward = 1.0 if dist < 0.1 else 0.0
                     new_done = True if new_reward == 1.0 else episode_experience[t]['d']
+                    future_goal = normalize_goal(future_goal_raw, env)
                     replay.store(episode_experience[t]['s'], future_goal, episode_experience[t]['a'], new_reward, episode_experience[t]['s_next'], future_goal, new_done)
 
         scores.append(score)
@@ -157,25 +173,10 @@ if __name__ == "__main__":
     model_path = os.path.join(current_dir, "dqn_her_model.pth")
     excel_path = os.path.join(current_dir, "episode_rewards_her.xlsx")
 
-    if os.path.exists(model_path):
-        agent.q_local.load_state_dict(torch.load(model_path, map_location=DEVICE))
-        agent.q_target.load_state_dict(agent.q_local.state_dict())
-        print(f"Loaded existing model from {model_path}")
-
     start_scores = []
-    if os.path.exists(excel_path):
-        df = pd.read_excel(excel_path)
-        start_scores = df['score'].tolist()
-        # Truncate to the last completed 500-episode block
-        original_count = len(start_scores)
-        start_scores = start_scores[:(len(start_scores) // 500) * 500]
-        if len(start_scores) < original_count:
-            print(f"Loaded {original_count} previous scores, but truncated to {len(start_scores)} to restart from the beginning of the current block.")
-        else:
-            print(f"Loaded {len(start_scores)} previous scores.")
 
-    print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
-    train_dqn_her_future(env, agent, replay, episodes=500, eps_start=1.0, start_scores=start_scores)
+    print(f"Starting training on {DEVICE} from scratch for 1000 episodes with initial eps=1.0...")
+    train_dqn_her_future(env, agent, replay, episodes=1000, eps_start=1.0, start_scores=start_scores)
     
     torch.save(agent.q_local.state_dict(), model_path)
     print(f"Final model saved to: {model_path}")

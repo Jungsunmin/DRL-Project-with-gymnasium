@@ -108,6 +108,13 @@ class DQNAgent:
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
+def normalize_obs(obs):
+    obs = np.asarray(obs, dtype=np.float32)
+    max_val = np.max(obs)
+    if max_val > 1.0:
+        obs = obs / max_val
+    return obs
+
 def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, batch_size=128, start_scores=None):
     scores = start_scores if start_scores is not None else []
     eps = eps_start
@@ -119,10 +126,12 @@ def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps
     
     for ep in range(start_ep, total_episodes):
         state, _ = env.reset()
+        state = normalize_obs(state)
         score = 0
         for t in range(500): # max steps per episode
             action = agent.act(state, eps)
             next_state, reward, terminated, truncated, _ = env.step(action)
+            next_state = normalize_obs(next_state)
             done = terminated or truncated
             replay.store(state, action, reward, next_state, done)
             state = next_state
@@ -173,27 +182,10 @@ if __name__ == "__main__":
     model_path = os.path.join(current_dir, "dqn_model.pth")
     excel_path = os.path.join(current_dir, "episode_rewards.xlsx")
 
-    # Load existing model if available
-    if os.path.exists(model_path):
-        agent.q_local.load_state_dict(torch.load(model_path, map_location=DEVICE))
-        agent.q_target.load_state_dict(agent.q_local.state_dict())
-        print(f"Loaded existing model from {model_path}")
-
-    # Load existing scores if available
     start_scores = []
-    if os.path.exists(excel_path):
-        df = pd.read_excel(excel_path)
-        start_scores = df['score'].tolist()
-        # Truncate to the last completed 500-episode block
-        original_count = len(start_scores)
-        start_scores = start_scores[:(len(start_scores) // 500) * 500]
-        if len(start_scores) < original_count:
-            print(f"Loaded {original_count} previous scores, but truncated to {len(start_scores)} to restart from the beginning of the current block.")
-        else:
-            print(f"Loaded {len(start_scores)} previous scores.")
 
-    print(f"Starting training on {DEVICE} for 500 more episodes with initial eps=0.4...")
-    scores = train_dqn(env, agent, replay, episodes=500, eps_start= 1.0, start_scores=start_scores)
+    print(f"Starting training on {DEVICE} from scratch for 1000 episodes with initial eps=1.0...")
+    scores = train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, start_scores=start_scores)
     
     # Final save
     torch.save(agent.q_local.state_dict(), model_path)
