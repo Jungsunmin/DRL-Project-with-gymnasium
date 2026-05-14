@@ -93,4 +93,4 @@ def test_dqn(num_episodes=10, render=True):
 
 if __name__ == "__main__":
     # Set render=False if you don't want to see the GUI
-    test_dqn(num_episodes=100, render=True)
+    test_dqn(num_episodes=10, render=True)
