@@ -114,7 +114,8 @@ def train_dqn(env, agent, replay, num_episodes=1000, eps_start=1.0, eps_end=0.01
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     for ep in range(num_episodes):
-        state, _ = env.reset(seed=SEED)
+        state, _ = env.reset()
+        state = normalize_obs(state)
         score = 0
         for t in range(500):
             action = agent.act(state, eps)
