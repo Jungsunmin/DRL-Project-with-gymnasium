@@ -1,5 +1,4 @@
-import gymnasium as gym
-from minigrid.wrappers import FlatObsWrapper
+from minigrid.wrappers import ImgObsWrapper
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 from model import QNetwork
+import gymnasium as gym
 
 # GPU 가속 설정
 if torch.backends.mps.is_available():
@@ -100,8 +100,8 @@ class DDQNAgent:
         return loss.item()
 
 def normalize_obs(obs):
-    # Normalize by 255.0 for project-wide consistency
-    return np.asarray(obs, dtype=np.float32) / 255.0
+    # Use only the image observation, flatten it, and normalize it to 0~1.
+    return np.asarray(obs, dtype=np.float32).flatten() / 255.0
 
 def normalize_goal(goal, env):
     goal = np.asarray(goal, dtype=np.float32)
@@ -175,9 +175,11 @@ def train_ddqn_her(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.0
     return scores
 
 if __name__ == "__main__":
-    env = gym.make("MiniGrid-DoorKey-8x8-v0"); env = FlatObsWrapper(env)
-    agent = DDQNAgent(state_size=env.observation_space.shape[0] + 2, action_size=env.action_space.n)
-    replay = HERReplayBuffer(env.observation_space.shape[0], 2)
+    env = gym.make("MiniGrid-DoorKey-8x8-v0"); env = ImgObsWrapper(env)
+    
+    obs_dim = int(np.prod(env.observation_space.shape))
+    agent = DDQNAgent(state_size=obs_dim + 2, action_size=env.action_space.n)
+    replay = HERReplayBuffer(obs_dim, 2)
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(current_dir, "ddqn_her_model.pth")

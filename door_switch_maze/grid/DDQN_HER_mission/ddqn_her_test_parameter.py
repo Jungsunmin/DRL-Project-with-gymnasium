@@ -1,5 +1,5 @@
 import gymnasium as gym
-from minigrid.wrappers import FlatObsWrapper
+from minigrid.wrappers import ImgObsWrapper
 import torch
 import numpy as np
 from model import QNetwork
@@ -7,8 +7,8 @@ import time
 import os
 
 def normalize_obs(obs):
-    # Normalize by 255.0 for project-wide consistency
-    return np.asarray(obs, dtype=np.float32) / 255.0
+    # Use only the image observation, flatten it, and normalize it to 0~1.
+    return np.asarray(obs, dtype=np.float32).flatten() / 255.0
 
 def normalize_goal(goal, env):
     goal = np.asarray(goal, dtype=np.float32)
@@ -21,9 +21,10 @@ def test_ddqn_her(env_id="MiniGrid-DoorKey-8x8-v0", model_path=None):
         model_path = os.path.join(current_dir, "ddqn_her_model.pth")
     
     env = gym.make(env_id, render_mode="human")
-    env = FlatObsWrapper(env)
+    env = ImgObsWrapper(env)
     
-    state_size = env.observation_space.shape[0] + 2
+    obs_dim = int(np.prod(env.observation_space.shape))
+    state_size = obs_dim + 2
     action_size = env.action_space.n
     
     model = QNetwork(state_size, action_size)

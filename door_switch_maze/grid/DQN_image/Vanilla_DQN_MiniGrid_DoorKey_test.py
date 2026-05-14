@@ -4,7 +4,7 @@
 # ===============================================================
 
 import gymnasium as gym
-from minigrid.wrappers import FlatObsWrapper
+from minigrid.wrappers import ImgObsWrapper
 import torch
 import torch.nn as nn
 import numpy as np
@@ -26,16 +26,16 @@ class QNetwork(nn.Module):
         return self.net(x)
 
 def normalize_obs(obs):
-    # Normalize by 255.0 as in the initial implementation
-    return np.asarray(obs, dtype=np.float32) / 255.0
+    # Use only the image observation, flatten it, and normalize it to 0~1.
+    return np.asarray(obs, dtype=np.float32).flatten() / 255.0
 
 def test_dqn(num_episodes=10, render=True):
     # Setup environment
     render_mode = "human" if render else None
     env = gym.make("MiniGrid-DoorKey-8x8-v0", render_mode=render_mode)
-    env = FlatObsWrapper(env)
+    env = ImgObsWrapper(env)
     
-    input_dim = env.observation_space.shape[0]
+    input_dim = int(np.prod(env.observation_space.shape))
     action_dim = env.action_space.n
     
     # Path handling to load relative to script
@@ -93,4 +93,4 @@ def test_dqn(num_episodes=10, render=True):
 
 if __name__ == "__main__":
     # Set render=False if you don't want to see the GUI
-    test_dqn(num_episodes=10, render=True)
+    test_dqn(num_episodes=50, render=False)

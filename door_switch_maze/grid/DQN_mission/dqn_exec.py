@@ -1,5 +1,5 @@
 import gymnasium as gym
-from minigrid.wrappers import FlatObsWrapper
+from minigrid.wrappers import ImgObsWrapper
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -109,8 +109,8 @@ class DQNAgent:
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
 def normalize_obs(obs):
-    # Normalize by 255.0 for project-wide consistency
-    return np.asarray(obs, dtype=np.float32) / 255.0
+    # Use only the image observation, flatten it, and normalize it to 0~1.
+    return np.asarray(obs, dtype=np.float32).flatten() / 255.0
 
 def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.999, batch_size=128, start_scores=None):
     scores = start_scores if start_scores is not None else []
@@ -168,9 +168,9 @@ def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, ep
 
 if __name__ == "__main__":
     env = gym.make("MiniGrid-DoorKey-8x8-v0")
-    env = FlatObsWrapper(env)
+    env = ImgObsWrapper(env)
     
-    state_size = env.observation_space.shape[0]
+    state_size = int(np.prod(env.observation_space.shape))
     action_size = env.action_space.n
     
     agent = DQNAgent(state_size=state_size, action_size=action_size)

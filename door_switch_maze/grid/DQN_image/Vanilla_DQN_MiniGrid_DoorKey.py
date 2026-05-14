@@ -4,7 +4,7 @@
 # ===============================================================
 
 import gymnasium as gym
-from minigrid.wrappers import FlatObsWrapper
+from minigrid.wrappers import ImgObsWrapper
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -143,10 +143,11 @@ def train_dqn(env, agent, replay, num_episodes=1000, eps_start=1.0, eps_end=0.01
 
 if __name__ == "__main__":
     env = gym.make("MiniGrid-DoorKey-8x8-v0")
-    env = FlatObsWrapper(env)
+    env = ImgObsWrapper(env)
     
-    agent = DQNAgent(state_size=env.observation_space.shape[0], action_size=env.action_space.n)
-    replay = ReplayBuffer(state_dim=env.observation_space.shape[0])
+    obs_dim = int(np.prod(env.observation_space.shape))
+    agent = DQNAgent(state_size=obs_dim, action_size=env.action_space.n)
+    replay = ReplayBuffer(state_dim=obs_dim)
     
     train_dqn(env, agent, replay, num_episodes=1000)
     print("Training Complete.")
