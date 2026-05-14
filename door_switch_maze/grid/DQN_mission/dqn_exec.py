@@ -109,13 +109,10 @@ class DQNAgent:
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
 def normalize_obs(obs):
-    obs = np.asarray(obs, dtype=np.float32)
-    max_val = np.max(obs)
-    if max_val > 1.0:
-        obs = obs / max_val
-    return obs
+    # Normalize by 255.0 for project-wide consistency
+    return np.asarray(obs, dtype=np.float32) / 255.0
 
-def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, batch_size=128, start_scores=None):
+def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.999, batch_size=128, start_scores=None):
     scores = start_scores if start_scores is not None else []
     eps = eps_start
     
@@ -144,7 +141,8 @@ def train_dqn(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps
                 break
         
         scores.append(score)
-        eps = max(eps_end, eps_decay * eps)
+        # Linear epsilon decay: proportional to total episodes
+        eps = max(eps_end, eps_start - (eps_start - eps_end) * (ep / total_episodes))
         
         progress = (ep + 1) / total_episodes * 100
         remaining = 100 - progress

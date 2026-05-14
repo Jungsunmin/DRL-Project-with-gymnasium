@@ -6,6 +6,15 @@ from model import QNetwork
 import time
 import os
 
+def normalize_obs(obs):
+    # Normalize by 255.0 for project-wide consistency
+    return np.asarray(obs, dtype=np.float32) / 255.0
+
+def normalize_goal(goal, env):
+    goal = np.asarray(goal, dtype=np.float32)
+    scale = np.array([env.unwrapped.width - 1, env.unwrapped.height - 1], dtype=np.float32)
+    return goal / scale
+
 def test_ddqn_her(env_id="MiniGrid-DoorKey-8x8-v0", model_path=None):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if model_path is None:
@@ -26,7 +35,9 @@ def test_ddqn_her(env_id="MiniGrid-DoorKey-8x8-v0", model_path=None):
         print("Model file not found. Running with random weights.")
     
     state, _ = env.reset()
-    actual_goal = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
+    state = normalize_obs(state)
+    actual_goal_raw = np.array([env.unwrapped.width-2, env.unwrapped.height-2], dtype=np.float32)
+    actual_goal = normalize_goal(actual_goal_raw, env)
     
     done = False
     total_reward = 0
@@ -40,6 +51,7 @@ def test_ddqn_her(env_id="MiniGrid-DoorKey-8x8-v0", model_path=None):
         action = np.argmax(action_values.data.numpy())
         
         state, reward, terminated, truncated, _ = env.step(action)
+        state = normalize_obs(state)
         done = terminated or truncated
         total_reward += reward
         step_count += 1

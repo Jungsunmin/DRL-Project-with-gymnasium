@@ -1,217 +1,151 @@
 # ===============================================================
 # Baseline DQN on MiniGrid-DoorKey-8x8-v0
 # Implements a Deep Q-Network for the DoorKey environment
-# Authors: Yash Kini, Shiv Davay, Shreya Polavarapu
 # ===============================================================
 
-# --- Imports ---
 import gymnasium as gym
-import minigrid  # Required for MiniGrid environments
-import numpy as np
+from minigrid.wrappers import FlatObsWrapper
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 import random
-from collections import deque
+import pandas as pd
 import matplotlib.pyplot as plt
+import os
+from collections import deque
 
-# ===============================================================
-# Reproducibility
-# Ensures consistent results across runs
-# ===============================================================
+# --- Device Configuration ---
+if torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+elif torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+else:
+    DEVICE = torch.device("cpu")
+
+print(f"==========================================")
+print(f"📌 Using Device: {DEVICE}")
+print(f"==========================================")
+
+# --- Reproducibility ---
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
-# ===============================================================
-# Preprocessing Function
-# Flattens and normalizes MiniGrid image observations
-# ===============================================================
-def preprocess_obs(obs):
-    img = obs["image"]  # Shape: (7, 7, 3)
-    return img.flatten().astype(np.float32) / 255.0  # Normalize to [0, 1]
-
-# ===============================================================
-# Vanilla DQN Model Architecture
-# Maps preprocessed state to Q-values for each action
-# ===============================================================
-class DQN(nn.Module):
+# --- Model Architecture ---
+class QNetwork(nn.Module):
     def __init__(self, input_dim, action_dim):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, 256),
-            nn.LayerNorm(256),   # Optional normalization for stability
             nn.ReLU(),
             nn.Linear(256, 256),
-            nn.LayerNorm(256),
             nn.ReLU(),
-            nn.Linear(256, action_dim)  # Output layer for Q-values
+            nn.Linear(256, action_dim)
         )
     def forward(self, x):
         return self.net(x)
 
-# ===============================================================
-# Epsilon-Greedy Action Selection
-# ===============================================================
-def epsilon_greedy(model, state, epsilon, action_space):
-    """With probability epsilon, take a random action; otherwise, pick the best one."""
-    if random.random() < epsilon:
-        return random.randrange(action_space)
-    with torch.no_grad():
-        q_vals = model(state)
-        return int(torch.argmax(q_vals).item())
+def normalize_obs(obs):
+    # Normalize by 255.0 as in the initial implementation
+    return np.asarray(obs, dtype=np.float32) / 255.0
 
-# Soft update to slowly blend target network toward current network
-def soft_update(target, source, tau=0.005):
-    for tp, p in zip(target.parameters(), source.parameters()):
-        tp.data.copy_(tau * p.data + (1.0 - tau) * tp.data)
+# --- Replay Buffer ---
+class ReplayBuffer:
+    def __init__(self, state_dim, size=100000, device=DEVICE):
+        self.device = device
+        self.obs_buf = np.zeros((size, state_dim), dtype=np.float32)
+        self.next_obs_buf = np.zeros((size, state_dim), dtype=np.float32)
+        self.acts_buf = np.zeros(size, dtype=np.int64)
+        self.rews_buf = np.zeros(size, dtype=np.float32)
+        self.done_buf = np.zeros(size, dtype=np.float32)
+        self.ptr, self.size, self.max_size = 0, 0, size
 
-# ===============================================================
-# Training Loop
-# Core DQN training logic using experience replay and target network
-# ===============================================================
-def train_dqn(env, model, target_model, optimizer,
-              num_episodes=700, gamma=0.99,
-              epsilon_start=1.0, epsilon_min=0.1, batch_size=128):
-    replay_buffer = deque(maxlen=50000)
-    all_rewards, losses = [], []
-    epsilon = epsilon_start
+    def store(self, obs, act, rew, next_obs, done):
+        self.obs_buf[self.ptr] = obs
+        self.next_obs_buf[self.ptr] = next_obs
+        self.acts_buf[self.ptr] = act
+        self.rews_buf[self.ptr] = rew
+        self.done_buf[self.ptr] = done
+        self.ptr = (self.ptr + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
+
+    def sample(self, batch_size=128):
+        idxs = np.random.randint(0, self.size, size=batch_size)
+        return (torch.as_tensor(self.obs_buf[idxs], device=self.device),
+                torch.as_tensor(self.acts_buf[idxs], device=self.device).unsqueeze(-1),
+                torch.as_tensor(self.rews_buf[idxs], device=self.device).unsqueeze(-1),
+                torch.as_tensor(self.next_obs_buf[idxs], device=self.device),
+                torch.as_tensor(self.done_buf[idxs], device=self.device).unsqueeze(-1))
+
+# --- DQN Agent ---
+class DQNAgent:
+    def __init__(self, state_size, action_size, lr=1e-4, gamma=0.99, tau=1e-3, device=DEVICE):
+        self.q_local = QNetwork(state_size, action_size).to(device)
+        self.q_target = QNetwork(state_size, action_size).to(device)
+        self.optimizer = optim.Adam(self.q_local.parameters(), lr=lr)
+        self.q_target.load_state_dict(self.q_local.state_dict())
+        self.gamma, self.tau, self.device, self.action_size = gamma, tau, device, action_size
+
+    def act(self, state, eps=0.):
+        state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        self.q_local.eval()
+        with torch.no_grad(): action_values = self.q_local(state_tensor)
+        self.q_local.train()
+        if random.random() > eps: return np.argmax(action_values.cpu().data.numpy())
+        else: return random.choice(np.arange(self.action_size))
+
+    def update(self, replay, batch_size=128):
+        states, actions, rewards, next_states, dones = replay.sample(batch_size)
+        Q_targets_next = self.q_target(next_states).detach().max(1)[0].unsqueeze(1)
+        Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
+        Q_expected = self.q_local(states).gather(1, actions)
+        loss = nn.functional.mse_loss(Q_expected, Q_targets)
+        self.optimizer.zero_grad(); loss.backward(); self.optimizer.step()
+        for tp, lp in zip(self.q_target.parameters(), self.q_local.parameters()):
+            tp.data.copy_(self.tau * lp.data + (1.0 - self.tau) * tp.data)
+        return loss.item()
+
+# --- Training ---
+def train_dqn(env, agent, replay, num_episodes=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.999, batch_size=128):
+    scores, losses = [], []
+    eps = eps_start
+    current_dir = os.path.dirname(os.path.abspath(__file__))
 
     for ep in range(num_episodes):
-        obs, _ = env.reset(seed=SEED)
-        state = torch.FloatTensor(preprocess_obs(obs)).unsqueeze(0)
-        done, total_reward = False, 0
-
-        while not done:
-            # Choose action and step through environment
-            action = epsilon_greedy(model, state, epsilon, env.action_space.n)
-            next_obs, reward, terminated, truncated, _ = env.step(action)
+        state, _ = env.reset(seed=SEED)
+        score = 0
+        for t in range(500):
+            action = agent.act(state, eps)
+            next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
-            total_reward += reward
+            replay.store(state, action, reward, next_state, done)
+            state, score = next_state, score + reward
+            if replay.size > batch_size:
+                loss = agent.update(replay, batch_size)
+                losses.append(loss)
+            if done: break
+        
+        scores.append(score)
+        # Linear epsilon decay: proportional to total episodes
+        eps = max(eps_end, eps_start - (eps_start - eps_end) * (ep / num_episodes))
+        
+        if (ep + 1) % 10 == 0:
+            print(f"Episode {ep+1}/{num_episodes}, Score: {score:.4f}, Avg Score: {np.mean(scores[-50:]):.4f}, Eps: {eps:.4f}")
+            # Save results
+            pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(os.path.join(current_dir, "episode_rewards.xlsx"), index=False)
+            torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "dqn_model_weights.pth"))
+            plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(os.path.join(current_dir, "scores.png")); plt.close()
 
-            next_state = torch.FloatTensor(preprocess_obs(next_obs)).unsqueeze(0)
-            # Store transition
-            replay_buffer.append((state.detach(), action, reward, next_state.detach(), float(done)))
-            state = next_state
+    return scores
 
-            # Only train once buffer has enough data
-            if len(replay_buffer) >= 5000:
-                batch = random.sample(replay_buffer, batch_size)
-                states, actions, rewards_b, next_states, dones = zip(*batch)
-
-                # Batch formatting
-                states = torch.cat(states)
-                next_states = torch.cat(next_states)
-                actions = torch.LongTensor(actions)
-                rewards_b = torch.FloatTensor(rewards_b)
-                dones = torch.FloatTensor(dones)
-
-                # Compute targets using Double DQN logic
-                with torch.no_grad():
-                    next_q = model(next_states)
-                    next_act = torch.argmax(next_q, dim=1)
-                    next_q_target = target_model(next_states)
-                    target_vals = next_q_target.gather(1, next_act.view(-1, 1)).squeeze(1)
-                    targets = rewards_b + gamma * target_vals * (1 - dones)
-
-                # Compute current Q-values and loss
-                q_vals = model(states).gather(1, actions.view(-1, 1)).squeeze(1)
-                loss = (q_vals - targets).pow(2).mean()
-
-                # Backpropagation
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.3)
-                optimizer.step()
-                losses.append(loss.item())
-
-                # Slowly update target network
-                soft_update(target_model, model, tau=0.005)
-
-        all_rewards.append(total_reward)
-        epsilon = max(epsilon_min, epsilon * 0.995)  # Decay epsilon over time
-
-        # Logging
-        if ep % 10 == 0:
-            mean_reward = np.mean(all_rewards[-50:]) if len(all_rewards) >= 50 else np.mean(all_rewards)
-            mean_loss = np.mean(losses[-100:]) if losses else 0.0
-            print(f"[Ep {ep:03d}] Reward: {total_reward:.2f} | Mean(50): {mean_reward:.2f} | "
-                  f"Eps: {epsilon:.3f} | Loss: {mean_loss:.4f}")
-
-    return all_rewards, losses
-
-# ===============================================================
-# Main
-# Sets up environment, trains model, evaluates, and visualizes
-# ===============================================================
-def main():
-    env = gym.make("MiniGrid-DoorKey-8x8-v0")  # Key-door sparse reward task
-    input_dim = 7 * 7 * 3  # Flattened image size
-    action_dim = env.action_space.n
-
-    # Instantiate model and target model
-    model = DQN(input_dim, action_dim)
-    target_model = DQN(input_dim, action_dim)
-    target_model.load_state_dict(model.state_dict())  # Synchronize weights
-
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
-
-    # Train model
-    rewards, losses = train_dqn(env, model, target_model, optimizer)
-
-    # --- Evaluation Metrics ---
-    final_window = 50
-    mean_final_reward = np.mean(rewards[-final_window:])
-    success_threshold = 0.8
-    episodes_to_threshold = next((i+1 for i, r in enumerate(rewards) if r >= success_threshold), len(rewards))
-    loss_variance = float(np.var(losses)) if losses else 0.0
-    reward_std = float(np.std(rewards))
-    auc_reward = float(np.trapezoid(rewards, dx=1))
-
-    # Output metrics
-    print("===== BASELINE DQN METRICS =====")
-    print(f"Mean reward in final {final_window} episodes: {mean_final_reward:.2f}")
-    print(f"Episodes to first success (>{success_threshold}): {episodes_to_threshold}")
-    print(f"Loss variance: {loss_variance:.6f}")
-    print(f"Reward standard deviation: {reward_std:.2f}")
-    print(f"AUC: {auc_reward:.2f}")
-    print("================================")
-
-    # --- Plotting ---
-    def smooth(data, w=0.9):
-        """Exponential moving average for smoothing curves."""
-        sm, last = [], data[0]
-        for x in data:
-            last = last * w + (1 - w) * x
-            sm.append(last)
-        return sm
-
-    plt.figure(figsize=(12, 5))
-
-    # Reward plot
-    plt.subplot(1, 2, 1)
-    plt.plot(rewards, label="Raw Reward", alpha=0.4)
-    plt.plot(smooth(rewards), label="Smoothed Reward")
-    plt.title("Baseline DQN: Rewards Over Time")
-    plt.xlabel("Episode"); plt.ylabel("Total Reward"); plt.legend(); plt.grid(alpha=0.3)
-
-    # Loss plot
-    plt.subplot(1, 2, 2)
-    plt.plot(losses, label="Mini-Batch Loss")
-    plt.title("Baseline DQN: Loss During Training")
-    plt.xlabel("Training Step"); plt.ylabel("Loss"); plt.legend(); plt.grid(alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig("Vanilla_DQN_MiniGrid_DoorKey_results.png", dpi=300, bbox_inches='tight')
-    
-    # --- Save Model Weights ---
-    torch.save(model.state_dict(), "dqn_model_weights.pth")
-    print("Model weights saved as 'dqn_model_weights.pth'")
-    
-    plt.show()
-    print("Plot saved as 'Vanilla_DQN_MiniGrid_DoorKey_results.png'")
-
-# Entrypoint
 if __name__ == "__main__":
-    main()
+    env = gym.make("MiniGrid-DoorKey-8x8-v0")
+    env = FlatObsWrapper(env)
+    
+    agent = DQNAgent(state_size=env.observation_space.shape[0], action_size=env.action_space.n)
+    replay = ReplayBuffer(state_dim=env.observation_space.shape[0])
+    
+    train_dqn(env, agent, replay, num_episodes=1000)
+    print("Training Complete.")

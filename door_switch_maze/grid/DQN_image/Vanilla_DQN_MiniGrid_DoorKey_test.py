@@ -4,57 +4,62 @@
 # ===============================================================
 
 import gymnasium as gym
-import minigrid
+from minigrid.wrappers import FlatObsWrapper
 import torch
 import torch.nn as nn
 import numpy as np
 import time
-
-# --- Preprocessing Function (must match training) ---
-def preprocess_obs(obs):
-    img = obs["image"]
-    return img.flatten().astype(np.float32) / 255.0
+import os
 
 # --- Model Architecture (must match training) ---
-class DQN(nn.Module):
+class QNetwork(nn.Module):
     def __init__(self, input_dim, action_dim):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, 256),
-            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Linear(256, 256),
-            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Linear(256, action_dim)
         )
     def forward(self, x):
         return self.net(x)
 
+def normalize_obs(obs):
+    # Normalize by 255.0 as in the initial implementation
+    return np.asarray(obs, dtype=np.float32) / 255.0
+
 def test_dqn(num_episodes=10, render=True):
     # Setup environment
     render_mode = "human" if render else None
     env = gym.make("MiniGrid-DoorKey-8x8-v0", render_mode=render_mode)
+    env = FlatObsWrapper(env)
     
-    input_dim = 7 * 7 * 3
+    input_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
     
+    # Path handling to load relative to script
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, "dqn_model_weights.pth")
+    
+    # Device
+    device = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
+    
     # Load model
-    model = DQN(input_dim, action_dim)
+    model = QNetwork(input_dim, action_dim).to(device)
     try:
-        model.load_state_dict(torch.load("dqn_model_weights.pth"))
+        model.load_state_dict(torch.load(model_path, map_location=device))
         model.eval()
-        print("Model weights loaded successfully.")
+        print(f"Model weights loaded successfully from: {model_path}")
     except FileNotFoundError:
-        print("Error: 'dqn_model_weights.pth' not found. Please run the training script first.")
+        print(f"Error: '{model_path}' not found. Please run the training script first.")
         return
 
     success_count = 0
     total_rewards = []
 
     for ep in range(num_episodes):
-        obs, _ = env.reset()
-        state = torch.FloatTensor(preprocess_obs(obs)).unsqueeze(0)
+        state, _ = env.reset()
         done, total_reward = False, 0
         
         while not done:
@@ -62,14 +67,15 @@ def test_dqn(num_episodes=10, render=True):
                 env.render()
                 time.sleep(0.05)
             
+            state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(device)
             with torch.no_grad():
-                q_vals = model(state)
+                q_vals = model(state_tensor)
                 action = int(torch.argmax(q_vals).item())
             
-            next_obs, reward, terminated, truncated, _ = env.step(action)
+            next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             total_reward += reward
-            state = torch.FloatTensor(preprocess_obs(next_obs)).unsqueeze(0)
+            state = next_state
 
         total_rewards.append(total_reward)
         if total_reward > 0:
@@ -87,4 +93,4 @@ def test_dqn(num_episodes=10, render=True):
 
 if __name__ == "__main__":
     # Set render=False if you don't want to see the GUI
-    test_dqn(num_episodes=10, render=False)
+    test_dqn(num_episodes=100, render=True)

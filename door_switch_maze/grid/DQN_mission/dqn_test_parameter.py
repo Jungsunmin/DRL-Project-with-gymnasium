@@ -5,6 +5,10 @@ import numpy as np
 from model import QNetwork
 import time
 
+def normalize_obs(obs):
+    # Normalize by 255.0 for project-wide consistency
+    return np.asarray(obs, dtype=np.float32) / 255.0
+
 def test_dqn(env_id="MiniGrid-DoorKey-8x8-v0", model_path="dqn_model.pth"):
     env = gym.make(env_id, render_mode="human")
     env = FlatObsWrapper(env)
@@ -17,6 +21,7 @@ def test_dqn(env_id="MiniGrid-DoorKey-8x8-v0", model_path="dqn_model.pth"):
     model.eval()
     
     state, _ = env.reset()
+    state = normalize_obs(state)
     done = False
     total_reward = 0
     
@@ -27,6 +32,7 @@ def test_dqn(env_id="MiniGrid-DoorKey-8x8-v0", model_path="dqn_model.pth"):
         action = np.argmax(action_values.data.numpy())
         
         state, reward, terminated, truncated, _ = env.step(action)
+        state = normalize_obs(state)
         done = terminated or truncated
         total_reward += reward
         env.render()

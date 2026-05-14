@@ -100,11 +100,8 @@ class DDQNAgent:
         return loss.item()
 
 def normalize_obs(obs):
-    obs = np.asarray(obs, dtype=np.float32)
-    max_val = np.max(obs)
-    if max_val > 1.0:
-        obs = obs / max_val
-    return obs
+    # Normalize by 255.0 for project-wide consistency
+    return np.asarray(obs, dtype=np.float32) / 255.0
 
 def normalize_goal(goal, env):
     goal = np.asarray(goal, dtype=np.float32)
@@ -114,7 +111,7 @@ def normalize_goal(goal, env):
 def get_agent_pos(env):
     return np.array(env.unwrapped.agent_pos, dtype=np.float32)
 
-def train_ddqn_her(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01, eps_decay=0.995, k_future=4, batch_size=128, start_scores=None):
+def train_ddqn_her(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, eps_decay=0.999, k_future=4, batch_size=128, start_scores=None):
     scores = start_scores if start_scores is not None else []
     eps = eps_start
     
@@ -161,7 +158,8 @@ def train_ddqn_her(env, agent, replay, episodes=500, eps_start=0.4, eps_end=0.01
                     replay.store(episode_experience[t]['s'], future_goal, episode_experience[t]['a'], new_reward, episode_experience[t]['s_next'], future_goal, new_done)
 
         scores.append(score)
-        eps = max(eps_end, eps * eps_decay)
+        # Linear epsilon decay: proportional to total episodes
+        eps = max(eps_end, eps_start - (eps_start - eps_end) * (ep / total_episodes))
         
         progress = (ep + 1) / total_episodes * 100
         remaining = 100 - progress
