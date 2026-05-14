@@ -135,9 +135,22 @@ def train_dqn(env, agent, replay, num_episodes=1000, eps_start=1.0, eps_end=0.01
         if (ep + 1) % 10 == 0:
             print(f"Episode {ep+1}/{num_episodes}, Score: {score:.4f}, Avg Score: {np.mean(scores[-50:]):.4f}, Eps: {eps:.4f}")
             # Save results
-            pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(os.path.join(current_dir, "episode_rewards.xlsx"), index=False)
+            df = pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores})
+            df.to_excel(os.path.join(current_dir, "episode_rewards.xlsx"), index=False)
             torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "dqn_model_weights.pth"))
-            plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(os.path.join(current_dir, "scores.png")); plt.close()
+            
+            # Plotting with Smoothing
+            plt.figure(figsize=(10,5))
+            plt.plot(scores, alpha=0.3, color='blue', label='Raw Reward')
+            if len(scores) >= 10:
+                smooth_scores = pd.Series(scores).rolling(window=10).mean()
+                plt.plot(smooth_scores, color='orange', linewidth=2, label='Smoothed Reward (MA 10)')
+            plt.title('DQN Training Scores')
+            plt.xlabel('Episode')
+            plt.ylabel('Score')
+            plt.legend()
+            plt.savefig(os.path.join(current_dir, "scores.png"))
+            plt.close()
 
     return scores
 

@@ -156,11 +156,16 @@ def train_dqn(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.01, ep
             # Save model periodically
             torch.save(agent.q_local.state_dict(), os.path.join(current_dir, "dqn_model.pth"))
             
-            # Plotting
+            # Plotting with Smoothing
             plt.figure(figsize=(10,5))
-            plt.plot(scores)
+            plt.plot(scores, alpha=0.3, color='blue', label='Raw Reward')
+            if len(scores) >= 10:
+                smooth_scores = pd.Series(scores).rolling(window=10).mean()
+                plt.plot(smooth_scores, color='orange', linewidth=2, label='Smoothed Reward (MA 10)')
+            plt.title('DQN Training Scores')
+            plt.xlabel('Episode')
             plt.ylabel('Score')
-            plt.xlabel('Episode #')
+            plt.legend()
             plt.savefig(os.path.join(current_dir, 'scores.png'))
             plt.close()
 

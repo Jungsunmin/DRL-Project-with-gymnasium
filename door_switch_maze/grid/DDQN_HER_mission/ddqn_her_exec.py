@@ -167,7 +167,19 @@ def train_ddqn_her(env, agent, replay, episodes=1000, eps_start=1.0, eps_end=0.0
         
         if (ep + 1) % 10 == 0:
             pd.DataFrame({"episode": range(1, len(scores)+1), "score": scores}).to_excel(os.path.join(current_dir, "episode_rewards_ddqn_her.xlsx"), index=False)
-            plt.figure(figsize=(10,5)); plt.plot(scores); plt.savefig(os.path.join(current_dir, "scores_ddqn_her.png")); plt.close()
+            
+            # Plotting with Smoothing
+            plt.figure(figsize=(10,5))
+            plt.plot(scores, alpha=0.3, color='blue', label='Raw Reward')
+            if len(scores) >= 10:
+                smooth_scores = pd.Series(scores).rolling(window=10).mean()
+                plt.plot(smooth_scores, color='orange', linewidth=2, label='Smoothed Reward (MA 10)')
+            plt.title('DDQN HER Training Scores')
+            plt.xlabel('Episode')
+            plt.ylabel('Score')
+            plt.legend()
+            plt.savefig(os.path.join(current_dir, "scores_ddqn_her.png"))
+            plt.close()
             
             model_path = os.path.join(current_dir, "ddqn_her_model.pth")
             torch.save(agent.q_local.state_dict(), model_path)
