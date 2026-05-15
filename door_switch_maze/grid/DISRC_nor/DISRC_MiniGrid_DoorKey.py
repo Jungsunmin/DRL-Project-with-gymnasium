@@ -250,6 +250,10 @@ def train_dqn(env, model, target_model, encoder,
             plt.savefig(os.path.join(current_dir, 'scores_disrc.png'))
             plt.close()
 
+    # Final save at the end of training loop
+    df = pd.DataFrame({"episode": range(1, len(all_rewards) + 1), "score": all_rewards})
+    df.to_excel(os.path.join(current_dir, "episode_rewards_disrc.xlsx"), index=False)
+
     return all_rewards, losses
 
 # ================================================================
@@ -308,7 +312,14 @@ def main():
     # Final save
     torch.save(model.state_dict(), model_path)
     torch.save(encoder.state_dict(), encoder_path)
+
+    # Final save of episode rewards to Excel
+    df = pd.DataFrame({"episode": range(1, len(rewards) + 1), "score": rewards})
+    excel_path = os.path.join(current_dir, "episode_rewards_disrc.xlsx")
+    df.to_excel(excel_path, index=False)
+
     print(f"Training finished. Models saved to {model_path} and {encoder_path}")
+    print(f"Episode rewards saved to {excel_path}")
 
 # Entrypoint
 if __name__ == "__main__":
