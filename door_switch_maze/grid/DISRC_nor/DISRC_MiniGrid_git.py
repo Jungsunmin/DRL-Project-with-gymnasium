@@ -14,18 +14,15 @@ import torch.nn as nn
 import torch.optim as optim
 import random
 import matplotlib.pyplot as plt
-import os
-import argparse
-import pandas as pd
 
 # ================================================================
-# Device Selection
-# Supporting MPS for Mac, CUDA for Nvidia, or CPU
+# Reproducibility
+# Set seeds for reproducibility across NumPy, random, and PyTorch
 # ================================================================
-DEVICE = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
-print(f"==========================================")
-print(f"📌 Using Device: {DEVICE}")
-print(f"==========================================")
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
 # ================================================================
 # Preprocessing for MiniGrid
@@ -47,7 +44,7 @@ def preprocess_obs(obs):
 def ensure_2d_tensor(tensor):
     """Ensures tensor is 2D for batch processing."""
     if isinstance(tensor, np.ndarray):
-        tensor = torch.FloatTensor(tensor).to(DEVICE)
+        tensor = torch.FloatTensor(tensor)
     if tensor.dim() == 1:
         tensor = tensor.unsqueeze(0)
     return tensor
@@ -148,12 +145,10 @@ def train_dqn(env, model, target_model, encoder,
     epsilon = epsilon_start
     reward_norm = 1.0  # For normalizing rewards
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-
     for episode in range(num_episodes):
-        obs, _ = env.reset()
+        obs, _ = env.reset(seed=SEED)
         state_arr = preprocess_obs(obs)
-        state_tensor = torch.FloatTensor(state_arr).unsqueeze(0).to(DEVICE)
+        state_tensor = torch.FloatTensor(state_arr).unsqueeze(0)
         done, total_reward = False, 0
 
         while not done:
@@ -164,7 +159,7 @@ def train_dqn(env, model, target_model, encoder,
             total_reward += reward
 
             next_state_arr = preprocess_obs(next_obs)
-            next_tensor = torch.FloatTensor(next_state_arr).unsqueeze(0).to(DEVICE)
+            next_tensor = torch.FloatTensor(next_state_arr).unsqueeze(0)
 
             # Reward shaping with DISRC bonus
             reward_norm = 0.99 * reward_norm + 0.01 * abs(reward)
@@ -180,11 +175,11 @@ def train_dqn(env, model, target_model, encoder,
             if len(replay_buffer) >= 5000:
                 batch = random.sample(replay_buffer, batch_size)
                 states, actions, rewards_b, next_states, dones = zip(*batch)
-                states = torch.cat([ensure_2d_tensor(s) for s in states]).to(DEVICE)
-                next_states = torch.cat([ensure_2d_tensor(ns) for ns in next_states]).to(DEVICE)
-                actions = torch.LongTensor(actions).to(DEVICE)
-                rewards_b = torch.FloatTensor(rewards_b).to(DEVICE)
-                dones = torch.FloatTensor(dones).to(DEVICE)
+                states = torch.cat([ensure_2d_tensor(s) for s in states])
+                next_states = torch.cat([ensure_2d_tensor(ns) for ns in next_states])
+                actions = torch.LongTensor(actions)
+                rewards_b = torch.FloatTensor(rewards_b)
+                dones = torch.FloatTensor(dones)
 
                 s_enc = encoder(states)
                 ns_enc = encoder(next_states)
@@ -220,40 +215,6 @@ def train_dqn(env, model, target_model, encoder,
             print(f"[Ep {episode:03d}] Reward: {total_reward:.2f} | Mean(50): {mean_reward:.2f} | "
                   f"Eps: {epsilon:.3f} | Loss: {mean_loss:.4f}")
 
-        if (episode + 1) % 50 == 0:
-            # Save results progressively
-            df = pd.DataFrame({"episode": range(1, len(all_rewards)+1), "score": all_rewards})
-            df.to_excel(os.path.join(current_dir, "episode_rewards_disrc.xlsx"), index=False)
-            
-            # Save model periodically
-            torch.save(model.state_dict(), os.path.join(current_dir, "disrc_model.pth"))
-            torch.save(encoder.state_dict(), os.path.join(current_dir, "disrc_encoder.pth"))
-            
-            # Plotting with Smoothing
-            plt.figure(figsize=(12, 5))
-            plt.subplot(1, 2, 1)
-            plt.plot(all_rewards, alpha=0.3, color='blue', label='Raw Reward')
-            if len(all_rewards) >= 10:
-                smooth_scores = pd.Series(all_rewards).rolling(window=10).mean()
-                plt.plot(smooth_scores, color='orange', linewidth=2, label='Smoothed Reward (MA 10)')
-            plt.title('DISRC Training Scores')
-            plt.xlabel('Episode')
-            plt.ylabel('Score')
-            plt.legend()
-
-            plt.subplot(1, 2, 2)
-            plt.plot(losses, label="Mini-Batch Loss")
-            plt.title("Mini-Batch Loss During Training")
-            plt.xlabel("Training Step"); plt.ylabel("Loss"); plt.legend(); plt.grid(alpha=0.3)
-            
-            plt.tight_layout()
-            plt.savefig(os.path.join(current_dir, 'scores_disrc.png'))
-            plt.close()
-
-    # Final save at the end of training loop
-    df = pd.DataFrame({"episode": range(1, len(all_rewards) + 1), "score": all_rewards})
-    df.to_excel(os.path.join(current_dir, "episode_rewards_disrc.xlsx"), index=False)
-
     return all_rewards, losses
 
 # ================================================================
@@ -266,14 +227,9 @@ def main():
     action_dim = env.action_space.n
 
     # Initialize networks
-    encoder = DISRCStateEncoder(input_dim=input_dim, encoded_dim=64).to(DEVICE)
-    model = DISRC_DQN(input_size=64, action_size=action_dim).to(DEVICE)
-    
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_dir, "disrc_model.pth")
-    encoder_path = os.path.join(current_dir, "disrc_encoder.pth")
-
-    target_model = DISRC_DQN(input_size=64, action_size=action_dim).to(DEVICE)
+    encoder = DISRCStateEncoder(input_dim=input_dim, encoded_dim=64)
+    model = DISRC_DQN(input_size=64, action_size=action_dim)
+    target_model = DISRC_DQN(input_size=64, action_size=action_dim)
     target_model.load_state_dict(model.state_dict())  # Sync weights
 
     # Initialize weights and optimizers
@@ -289,7 +245,7 @@ def main():
     # Train
     rewards, losses = train_dqn(env, model, target_model, encoder,
                                 encoder_optimizer, model_optimizer,
-                                disrc_controller, num_episodes=1000)
+                                disrc_controller)
 
     # Evaluation Metrics
     final_window = 50
@@ -309,17 +265,30 @@ def main():
     print(f"AUC: {auc_reward:.2f}")
     print("===================")
 
-    # Final save
-    torch.save(model.state_dict(), model_path)
-    torch.save(encoder.state_dict(), encoder_path)
+    # Plot reward and loss curves
+    def smooth(data, w=0.9):
+        sm, last = [], data[0]
+        for x in data:
+            last = last * w + (1 - w) * x
+            sm.append(last)
+        return sm
 
-    # Final save of episode rewards to Excel
-    df = pd.DataFrame({"episode": range(1, len(rewards) + 1), "score": rewards})
-    excel_path = os.path.join(current_dir, "episode_rewards_disrc.xlsx")
-    df.to_excel(excel_path, index=False)
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(rewards, label="Raw Reward", alpha=0.4)
+    plt.plot(smooth(rewards), label="Smoothed Reward")
+    plt.title("Episode Rewards Over Time")
+    plt.xlabel("Episode"); plt.ylabel("Total Reward"); plt.legend(); plt.grid(alpha=0.3)
 
-    print(f"Training finished. Models saved to {model_path} and {encoder_path}")
-    print(f"Episode rewards saved to {excel_path}")
+    plt.subplot(1, 2, 2)
+    plt.plot(losses, label="Mini-Batch Loss")
+    plt.title("Mini-Batch Loss During Training")
+    plt.xlabel("Training Step"); plt.ylabel("Loss"); plt.legend(); plt.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("DISRC_MiniGrid_DoorKey_results.png", dpi=300, bbox_inches='tight')
+    plt.show()
+    print("Plot saved as 'DISRC_MiniGrid_DoorKey_results.png'")
 
 # Entrypoint
 if __name__ == "__main__":
