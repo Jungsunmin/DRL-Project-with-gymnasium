@@ -138,7 +138,7 @@ def train_dqn(env, model, target_model, encoder,
               encoder_optimizer, model_optimizer,
               disrc_controller,
               num_episodes=700, gamma=0.99,
-              epsilon_start=1.0, epsilon_min=0.1,
+              epsilon_start=1.0, epsilon_min=0.01,
               batch_size=128):
     replay_buffer = deque(maxlen=50000)
     all_rewards, losses = [], []
@@ -206,7 +206,8 @@ def train_dqn(env, model, target_model, encoder,
                 soft_update(target_model, model, tau=0.005)
 
         all_rewards.append(total_reward)
-        epsilon = max(epsilon_min, epsilon * 0.995)
+        # Linear epsilon decay: proportional to total episodes
+        epsilon = max(epsilon_min, epsilon_start - (epsilon_start - epsilon_min) * (episode / num_episodes))
 
         # Logging
         if episode % 10 == 0:
